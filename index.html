@@ -34,6 +34,7 @@
             height: 100%;
             object-fit: cover;
         }
+        /* Video dibalik untuk efek cermin */
         video {
             transform: scaleX(-1);
         }
@@ -102,13 +103,7 @@
         ];
         const loadedHeadwear = [];
 
-        // --- PENGATURAN BARU ---
-        const CONFIDENCE_THRESHOLD = 0.7; // Abaikan deteksi di bawah 70% kepercayaan
-        const smoothingBufferSize = 8;
-        
-        // --- SISTEM KONSISTENSI FILTER SEDERHANA ---
-        let faceAssetAssignments = []; // [indexGambarUntukWajah1, indexGambarUntukWajah2, ...]
-        let faceHistories = []; // [{historyWajah1}, {historyWajah2}, ...]
+        const CONFIDENCE_THRESHOLD = 0.5;
 
         function preloadImages(imagePaths, loadedArray) {
             return new Promise(resolve => {
@@ -134,7 +129,7 @@
             }
         }
 
-        async function runDetection() {
+        async function run() {
             await Promise.all([
                 faceapi.nets.tinyFaceDetector.loadFromUri('https://cdn.jsdelivr.net/gh/justadudewhohacks/face-api.js@0.22.2/weights'),
                 faceapi.nets.faceLandmark68Net.loadFromUri('https://cdn.jsdelivr.net/gh/justadudewhohacks/face-api.js@0.22.2/weights'),
@@ -144,6 +139,67 @@
             startVideo();
         }
 
+        async function drawLoop() {
+            requestAnimationFrame(drawLoop);
+
+            if (video.paused || video.ended || !loadedHeadwear.length) {
+                return;
+            }
+
+            const detections = await faceapi.detectAllFaces(video, new faceapi.TinyFaceDetectorOptions({ scoreThreshold: CONFIDENCE_THRESHOLD })).withFaceLandmarks();
+            
+            const displaySize = { width: canvas.width, height: canvas.height };
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+            // --- KOREKSI CERMIN DI LEVEL KANVAS ---
+            // Ini adalah perbaikan kunci yang akan menyelesaikan masalah "terbalik" dan "tidak muncul"
+            ctx.save();
+            ctx.translate(canvas.width, 0);
+            ctx.scale(-1, 1);
+            
+            const resizedDetections = faceapi.resizeResults(detections, displaySize);
+            
+            // Gambar tracker dan aset di dalam konteks kanvas yang sudah dibalik
+            if (resizedDetections.length > 0) {
+                faceapi.draw.drawFaceLandmarks(ctx, resizedDetections);
+
+                resizedDetections.forEach((detection, i) => {
+                    const landmarks = detection.landmarks;
+                    const jawOutline = landmarks.getJawOutline();
+                    
+                    const hatCenterX = (jawOutline[0].x + jawOutline[16].x) / 2;
+                    const faceWidth = jawOutline[16].x - jawOutline[0].x;
+                    const angle = Math.atan2(jawOutline[16].y - jawOutline[0].y, jawOutline[16].x - jawOutline[0].x);
+
+                    const leftEyebrow = landmarks.getLeftEyeBrow();
+                    const rightEyebrow = landmarks.getRightEyeBrow();
+                    const eyebrowTopY = Math.min(...leftEyebrow.map(p => p.y), ...rightEyebrow.map(p => p.y));
+                    const noseBridgeY = landmarks.getNose()[0].y;
+                    const eyeToEyebrowDist = Math.abs(eyebrowTopY - noseBridgeY);
+                    const hatBaseY = eyebrowTopY - (eyeToEyebrowDist * 0.75);
+                    
+                    const headwearIndex = i % loadedHeadwear.length;
+                    const headwearImg = loadedHeadwear[headwearIndex];
+                    
+                    if (headwearImg && headwearImg.complete && faceWidth > 0) {
+                        const hatWidth = faceWidth * 1.8;
+                        const hatHeight = headwearImg.height * (hatWidth / headwearImg.width);
+                        
+                        ctx.save();
+                        ctx.translate(hatCenterX, hatBaseY);
+                        ctx.rotate(angle);
+                        // Balik gambar aset agar tidak ikut terbalik oleh kanvas
+                        ctx.scale(-1, 1); 
+                        ctx.drawImage(headwearImg, -hatWidth / 2, -hatHeight, hatWidth, hatHeight);
+                        ctx.restore();
+                    }
+                });
+            }
+
+            // Kembalikan konteks kanvas ke kondisi normal
+            ctx.restore();
+        }
+
         video.addEventListener('play', () => {
             const onResize = () => {
                 const displaySize = { width: window.innerWidth, height: window.innerHeight };
@@ -151,85 +207,10 @@
             };
             window.addEventListener('resize', onResize);
             onResize();
-            
-            setInterval(async () => {
-                const allDetections = await faceapi.detectAllFaces(video, new faceapi.TinyFaceDetectorOptions()).withFaceLandmarks();
-                
-                // --- Saring deteksi dengan kepercayaan rendah ---
-                const highConfidenceDetections = allDetections.filter(d => d.detection.score > CONFIDENCE_THRESHOLD);
-                
-                const displaySize = { width: canvas.width, height: canvas.height };
-                const resizedDetections = faceapi.resizeResults(highConfidenceDetections, displaySize);
-                
-                ctx.clearRect(0, 0, canvas.width, canvas.height);
-                faceapi.draw.drawFaceLandmarks(canvas, resizedDetections);
-
-                // --- Atur ulang papan tugas jika jumlah wajah berubah ---
-                if (resizedDetections.length !== faceAssetAssignments.length) {
-                    faceAssetAssignments = [];
-                    faceHistories = [];
-                    for (let i = 0; i < resizedDetections.length; i++) {
-                        faceAssetAssignments.push(Math.floor(Math.random() * loadedHeadwear.length));
-                        faceHistories.push({ x: [], y: [], width: [], angle: [] });
-                    }
-                }
-
-                if (loadedHeadwear.length > 0) {
-                    resizedDetections.forEach((detection, i) => {
-                        const history = faceHistories[i];
-                        const headwearIndex = faceAssetAssignments[i];
-                        
-                        const landmarks = detection.landmarks;
-                        const jawOutline = landmarks.getJawOutline();
-                        
-                        const leftEyebrow = landmarks.getLeftEyeBrow();
-                        const rightEyebrow = landmarks.getRightEyeBrow();
-                        
-                        const rawCenterX = (jawOutline[0].x + jawOutline[16].x) / 2;
-                        const eyebrowTopY = Math.min(...leftEyebrow.map(p => p.y), ...rightEyebrow.map(p => p.y));
-                        const noseBridge = landmarks.getNose()[0];
-                        const eyeToEyebrowDist = eyebrowTopY - noseBridge.y;
-                        const rawHatBaseY = eyebrowTopY - (eyeToEyebrowDist * 0.5);
-                        const rawFaceWidth = jawOutline[16].x - jawOutline[0].x;
-                        const rawAngle = Math.atan2(jawOutline[16].y - jawOutline[0].y, jawOutline[16].x - jawOutline[0].x);
-
-                        history.x.push(rawCenterX);
-                        history.y.push(rawHatBaseY);
-                        history.width.push(rawFaceWidth);
-                        history.angle.push(rawAngle);
-
-                        if (history.x.length > smoothingBufferSize) {
-                            history.x.shift();
-                            history.y.shift();
-                            history.width.shift();
-                            history.angle.shift();
-                        }
-
-                        const avg = (arr) => arr.length > 0 ? arr.reduce((a, b) => a + b, 0) / arr.length : 0;
-                        const smoothCenterX = avg(history.x);
-                        const smoothHatBaseY = avg(history.y);
-                        const smoothWidth = avg(history.width);
-                        const smoothAngle = avg(history.angle);
-
-                        const headwearImg = loadedHeadwear[headwearIndex];
-                        
-                        if (headwearImg && headwearImg.complete && smoothWidth > 0) {
-                            const hatWidth = smoothWidth * 1.8;
-                            const hatHeight = headwearImg.height * (hatWidth / headwearImg.width);
-                            
-                            ctx.save();
-                            ctx.translate(smoothCenterX, smoothHatBaseY);
-                            ctx.rotate(smoothAngle);
-                            ctx.drawImage(headwearImg, -hatWidth / 2, -hatHeight, hatWidth, hatHeight);
-                            ctx.restore();
-                        }
-                    });
-                }
-            }, 60);
+            drawLoop();
         });
 
-        runDetection();
+        run();
     </script>
 </body>
 </html>
-
