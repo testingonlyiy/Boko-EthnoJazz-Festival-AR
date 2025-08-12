@@ -3,37 +3,233 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>BokoEthno Jazz Festival - AR Filter</title>
-    <link rel="stylesheet" href="style.css">
-    
-    <!-- 
-      ====================================================================
-      PERUBAHAN PENTING DI SINI:
-      Kita sekarang memuat semua pustaka dari folder lokal 'libs' Anda.
-      Ini membuat aplikasi tidak lagi bergantung pada koneksi internet untuk memuat model.
-      ====================================================================
-    -->
-    <script src="libs/tfjs-core.min.js" defer></script>
-    <script src="libs/tfjs-converter.min.js" defer></script>
-    <script src="libs/tfjs-backend-webgl.min.js" defer></script>
-    <script src="libs/face-landmarks-detection.min.js" defer></script>
-
-    <!-- Memuat file JavaScript utama kita, tidak ada perubahan di sini -->
-    <script src="script.js" defer></script>
+    <title>Boko EthnoJazz Festival AR</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body, html {
+            margin: 0;
+            padding: 0;
+            width: 100%;
+            height: 100%;
+            overflow: hidden;
+            background-color: #111827;
+            font-family: 'Inter', sans-serif;
+        }
+        .camera-container {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            width: 100vw;
+            height: 100vh;
+            transform: translate(-50%, -50%);
+            display: flex;
+            justify-content: center;
+            align-items: center;
+        }
+        video, canvas {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+        }
+        video {
+            transform: scaleX(-1);
+        }
+        canvas {
+            background-color: transparent;
+        }
+        #title-bar {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            padding: 1.5rem 0;
+            background-color: rgba(0, 0, 0, 0.5);
+            backdrop-filter: blur(5px);
+            text-align: center;
+            z-index: 10;
+        }
+        #loading-overlay {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background-color: rgba(0, 0, 0, 0.7);
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            z-index: 20;
+            color: white;
+        }
+    </style>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;700&display=swap" rel="stylesheet">
 </head>
 <body>
-    <div class="container">
-        <h1>BokoEthno Jazz Festival AR Filter</h1>
-        
-        <!-- Elemen ini akan menampilkan status: Memuat, Gagal, atau Berhasil -->
-        <p id="message">Mempersiapkan aplikasi...</p>
-        
-        <div class="canvas-wrapper">
-            <!-- Canvas adalah tempat kita akan menggambar video dan filternya -->
-            <canvas id="output"></canvas>
-            <!-- Elemen video kita sembunyikan, hanya sebagai sumber data untuk canvas -->
-            <video id="video" playsinline style="display: none;"></video>
+
+    <div id="title-bar">
+        <h1 class="text-2xl md:text-3xl font-bold text-white tracking-wider">Boko EthnoJazz Festival</h1>
+        <p class="text-sm md:text-base text-yellow-300">Augmented Reality</p>
+    </div>
+
+    <div class="camera-container">
+        <video id="video" autoplay muted playsinline></video>
+        <canvas id="canvas"></canvas>
+    </div>
+
+    <div id="loading-overlay">
+        <div class="text-center">
+            <h1 class="text-3xl font-bold">⏳ Memuat Model AI...</h1>
+            <p class="mt-2">Mohon tunggu dan izinkan akses kamera.</p>
         </div>
     </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/face-api.js@0.22.2/dist/face-api.min.js"></script>
+
+    <script>
+        const video = document.getElementById('video');
+        const canvas = document.getElementById('canvas');
+        const loadingOverlay = document.getElementById('loading-overlay');
+        const ctx = canvas.getContext('2d');
+
+        const headwearImages = [
+            'blangkon.png', 'songkok.png', 'udeng.png',
+            'tanjak palembang.png', 'kupiah.png', 'tanjak.png'
+        ];
+        const loadedHeadwear = [];
+
+        // --- PENGATURAN BARU ---
+        const CONFIDENCE_THRESHOLD = 0.7; // Abaikan deteksi di bawah 70% kepercayaan
+        const smoothingBufferSize = 8;
+        
+        // --- SISTEM KONSISTENSI FILTER SEDERHANA ---
+        let faceAssetAssignments = []; // [indexGambarUntukWajah1, indexGambarUntukWajah2, ...]
+        let faceHistories = []; // [{historyWajah1}, {historyWajah2}, ...]
+
+        function preloadImages(imagePaths, loadedArray) {
+            return new Promise(resolve => {
+                let loadedCount = 0;
+                if (imagePaths.length === 0) resolve();
+                imagePaths.forEach(src => {
+                    const img = new Image();
+                    img.src = src;
+                    img.onload = () => { loadedCount++; if (loadedCount === imagePaths.length) resolve(); };
+                    img.onerror = () => { console.error(`Gagal memuat: ${src}.`); loadedCount++; if (loadedCount === imagePaths.length) resolve(); }
+                    loadedArray.push(img);
+                });
+            });
+        }
+
+        async function startVideo() {
+            try {
+                const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'user' } });
+                video.srcObject = stream;
+            } catch (err) {
+                console.error("Error kamera: ", err);
+                loadingOverlay.innerHTML = `<div class="text-center"><h1 class="text-2xl font-bold">❌ Gagal Mengakses Kamera</h1><p>Mohon segarkan halaman dan izinkan akses.</p></div>`;
+            }
+        }
+
+        async function runDetection() {
+            await Promise.all([
+                faceapi.nets.tinyFaceDetector.loadFromUri('https://cdn.jsdelivr.net/gh/justadudewhohacks/face-api.js@0.22.2/weights'),
+                faceapi.nets.faceLandmark68Net.loadFromUri('https://cdn.jsdelivr.net/gh/justadudewhohacks/face-api.js@0.22.2/weights'),
+                preloadImages(headwearImages, loadedHeadwear)
+            ]);
+            loadingOverlay.style.display = 'none';
+            startVideo();
+        }
+
+        video.addEventListener('play', () => {
+            const onResize = () => {
+                const displaySize = { width: window.innerWidth, height: window.innerHeight };
+                faceapi.matchDimensions(canvas, displaySize);
+            };
+            window.addEventListener('resize', onResize);
+            onResize();
+            
+            setInterval(async () => {
+                const allDetections = await faceapi.detectAllFaces(video, new faceapi.TinyFaceDetectorOptions()).withFaceLandmarks();
+                
+                // --- Saring deteksi dengan kepercayaan rendah ---
+                const highConfidenceDetections = allDetections.filter(d => d.detection.score > CONFIDENCE_THRESHOLD);
+                
+                const displaySize = { width: canvas.width, height: canvas.height };
+                const resizedDetections = faceapi.resizeResults(highConfidenceDetections, displaySize);
+                
+                ctx.clearRect(0, 0, canvas.width, canvas.height);
+                faceapi.draw.drawFaceLandmarks(canvas, resizedDetections);
+
+                // --- Atur ulang papan tugas jika jumlah wajah berubah ---
+                if (resizedDetections.length !== faceAssetAssignments.length) {
+                    faceAssetAssignments = [];
+                    faceHistories = [];
+                    for (let i = 0; i < resizedDetections.length; i++) {
+                        faceAssetAssignments.push(Math.floor(Math.random() * loadedHeadwear.length));
+                        faceHistories.push({ x: [], y: [], width: [], angle: [] });
+                    }
+                }
+
+                if (loadedHeadwear.length > 0) {
+                    resizedDetections.forEach((detection, i) => {
+                        const history = faceHistories[i];
+                        const headwearIndex = faceAssetAssignments[i];
+                        
+                        const landmarks = detection.landmarks;
+                        const jawOutline = landmarks.getJawOutline();
+                        
+                        const leftEyebrow = landmarks.getLeftEyeBrow();
+                        const rightEyebrow = landmarks.getRightEyeBrow();
+                        
+                        const rawCenterX = (jawOutline[0].x + jawOutline[16].x) / 2;
+                        const eyebrowTopY = Math.min(...leftEyebrow.map(p => p.y), ...rightEyebrow.map(p => p.y));
+                        const noseBridge = landmarks.getNose()[0];
+                        const eyeToEyebrowDist = eyebrowTopY - noseBridge.y;
+                        const rawHatBaseY = eyebrowTopY - (eyeToEyebrowDist * 0.5);
+                        const rawFaceWidth = jawOutline[16].x - jawOutline[0].x;
+                        const rawAngle = Math.atan2(jawOutline[16].y - jawOutline[0].y, jawOutline[16].x - jawOutline[0].x);
+
+                        history.x.push(rawCenterX);
+                        history.y.push(rawHatBaseY);
+                        history.width.push(rawFaceWidth);
+                        history.angle.push(rawAngle);
+
+                        if (history.x.length > smoothingBufferSize) {
+                            history.x.shift();
+                            history.y.shift();
+                            history.width.shift();
+                            history.angle.shift();
+                        }
+
+                        const avg = (arr) => arr.length > 0 ? arr.reduce((a, b) => a + b, 0) / arr.length : 0;
+                        const smoothCenterX = avg(history.x);
+                        const smoothHatBaseY = avg(history.y);
+                        const smoothWidth = avg(history.width);
+                        const smoothAngle = avg(history.angle);
+
+                        const headwearImg = loadedHeadwear[headwearIndex];
+                        
+                        if (headwearImg && headwearImg.complete && smoothWidth > 0) {
+                            const hatWidth = smoothWidth * 1.8;
+                            const hatHeight = headwearImg.height * (hatWidth / headwearImg.width);
+                            
+                            ctx.save();
+                            ctx.translate(smoothCenterX, smoothHatBaseY);
+                            ctx.rotate(smoothAngle);
+                            ctx.drawImage(headwearImg, -hatWidth / 2, -hatHeight, hatWidth, hatHeight);
+                            ctx.restore();
+                        }
+                    });
+                }
+            }, 60);
+        });
+
+        runDetection();
+    </script>
 </body>
 </html>
+
