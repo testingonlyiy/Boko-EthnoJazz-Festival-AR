@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>BokoEthno Jazz Festival - AR Filter</title>
+    <link rel="stylesheet" href="style.css">
+    
+    <!-- 
+      ====================================================================
+      PERUBAHAN PENTING DI SINI:
+      Kita sekarang memuat semua pustaka dari folder lokal 'libs' Anda.
+      Ini membuat aplikasi tidak lagi bergantung pada koneksi internet untuk memuat model.
+      ====================================================================
+    -->
+    <script src="libs/tfjs-core.min.js" defer></script>
+    <script src="libs/tfjs-converter.min.js" defer></script>
+    <script src="libs/tfjs-backend-webgl.min.js" defer></script>
+    <script src="libs/face-landmarks-detection.min.js" defer></script>
+
+    <!-- Memuat file JavaScript utama kita, tidak ada perubahan di sini -->
+    <script src="script.js" defer></script>
+</head>
+<body>
+    <div class="container">
+        <h1>BokoEthno Jazz Festival AR Filter</h1>
+        
+        <!-- Elemen ini akan menampilkan status: Memuat, Gagal, atau Berhasil -->
+        <p id="message">Mempersiapkan aplikasi...</p>
+        
+        <div class="canvas-wrapper">
+            <!-- Canvas adalah tempat kita akan menggambar video dan filternya -->
+            <canvas id="output"></canvas>
+            <!-- Elemen video kita sembunyikan, hanya sebagai sumber data untuk canvas -->
+            <video id="video" playsinline style="display: none;"></video>
+        </div>
+    </div>
+</body>
+</html>
