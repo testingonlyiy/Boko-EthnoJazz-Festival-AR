@@ -34,7 +34,6 @@
             height: 100%;
             object-fit: cover;
         }
-        /* Video dibalik untuk efek cermin */
         video {
             transform: scaleX(-1);
         }
@@ -104,6 +103,7 @@
         const loadedHeadwear = [];
 
         const CONFIDENCE_THRESHOLD = 0.5;
+        let faceAssetAssignments = [];
 
         function preloadImages(imagePaths, loadedArray) {
             return new Promise(resolve => {
@@ -152,14 +152,20 @@
             ctx.clearRect(0, 0, canvas.width, canvas.height);
 
             // --- KOREKSI CERMIN DI LEVEL KANVAS ---
-            // Ini adalah perbaikan kunci yang akan menyelesaikan masalah "terbalik" dan "tidak muncul"
             ctx.save();
-            ctx.translate(canvas.width, 0);
             ctx.scale(-1, 1);
+            ctx.translate(-canvas.width, 0);
             
             const resizedDetections = faceapi.resizeResults(detections, displaySize);
             
-            // Gambar tracker dan aset di dalam konteks kanvas yang sudah dibalik
+            // Urutkan deteksi berdasarkan posisi X untuk konsistensi slot
+            resizedDetections.sort((a, b) => a.detection.box.x - b.detection.box.x);
+            
+            // Atur ulang penugasan aset jika jumlah wajah berubah
+            if (resizedDetections.length !== faceAssetAssignments.length) {
+                faceAssetAssignments = resizedDetections.map(() => Math.floor(Math.random() * loadedHeadwear.length));
+            }
+
             if (resizedDetections.length > 0) {
                 faceapi.draw.drawFaceLandmarks(ctx, resizedDetections);
 
@@ -176,11 +182,16 @@
                     const eyebrowTopY = Math.min(...leftEyebrow.map(p => p.y), ...rightEyebrow.map(p => p.y));
                     const noseBridgeY = landmarks.getNose()[0].y;
                     const eyeToEyebrowDist = Math.abs(eyebrowTopY - noseBridgeY);
-                    const hatBaseY = eyebrowTopY - (eyeToEyebrowDist * 0.75);
                     
-                    const headwearIndex = i % loadedHeadwear.length;
+                    // --- PENYESUAIAN PRESISI VERTIKAL ---
+                    // Mengubah multiplier menjadi nilai yang sangat kecil (bahkan positif) akan menurunkannya.
+                    // Mari kita coba tambahkan sedikit offset ke bawah dari alis.
+                    const hatBaseY = eyebrowTopY + (eyeToEyebrowDist * 0.1);
+                    
+                    const headwearIndex = faceAssetAssignments[i];
+                    if (headwearIndex === undefined) return;
+                    
                     const headwearImg = loadedHeadwear[headwearIndex];
-                    
                     if (headwearImg && headwearImg.complete && faceWidth > 0) {
                         const hatWidth = faceWidth * 1.8;
                         const hatHeight = headwearImg.height * (hatWidth / headwearImg.width);
